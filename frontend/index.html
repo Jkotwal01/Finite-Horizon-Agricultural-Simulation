@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AgriSim — Finite-Horizon Farm AI Dashboard</title>
+  <meta name="description" content="AI-driven agricultural simulation dashboard. Manage crops, animals, and market to maximize Terminal Wealth over 720 turns." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <!-- ═══════════════════════════════════════════ HEADER ═══ -->
+  <header class="header" role="banner">
+    <div class="header-brand">
+      <span class="brand-icon" aria-hidden="true">🌾</span>
+      <span class="brand-name">AgriSim</span>
+      <span class="brand-tag">Finite-Horizon Farm AI</span>
+    </div>
+    <div class="header-stats">
+      <div class="stat-pill" id="pill-turn">
+        <span class="stat-label">Turn</span>
+        <span class="stat-value" id="stat-turn">—</span>
+        <span class="stat-sub">/ 720</span>
+      </div>
+      <div class="stat-pill" id="pill-day">
+        <span class="stat-label">Day</span>
+        <span class="stat-value" id="stat-day">—</span>
+        <span class="stat-sub">/ 30</span>
+      </div>
+      <div class="stat-pill cash-pill" id="pill-cash">
+        <span class="stat-label">Cash</span>
+        <span class="stat-value" id="stat-cash">—</span>
+      </div>
+      <div class="stat-pill" id="pill-wealth">
+        <span class="stat-label">Wealth</span>
+        <span class="stat-value" id="stat-wealth">—</span>
+      </div>
+    </div>
+    <div class="header-badge" id="endgame-badge" style="display:none">
+      🔴 ENDGAME MODE
+    </div>
+  </header>
+
+  <!-- ═══════════════════════════════════════════ MAIN LAYOUT ═══ -->
+  <main class="main-layout" role="main">
+
+    <!-- LEFT: Controls + Farm Grid -->
+    <section class="panel panel-left" aria-label="Farm Controls">
+
+      <!-- Control Panel -->
+      <div class="card control-card">
+        <h2 class="card-title">⚙️ Controls</h2>
+        <div class="control-grid">
+          <button id="btn-start" class="btn btn-primary" onclick="simStart()">
+            🚀 Start
+          </button>
+          <button id="btn-step" class="btn btn-secondary" onclick="simStep()" disabled>
+            ⏭ Step (1 Turn)
+          </button>
+          <button id="btn-day" class="btn btn-secondary" onclick="simDay()" disabled>
+            📅 Run Day (24T)
+          </button>
+          <button id="btn-full" class="btn btn-danger" onclick="simFull()" disabled>
+            ⚡ Run Full 720
+          </button>
+        </div>
+        <div class="progress-wrap">
+          <div class="progress-bar-bg">
+            <div class="progress-bar" id="progress-bar" style="width:0%"></div>
+          </div>
+          <span class="progress-label" id="progress-label">0 / 720 turns</span>
+        </div>
+        <div id="status-msg" class="status-msg" role="status" aria-live="polite">
+          Click <strong>Start</strong> to begin the simulation.
+        </div>
+      </div>
+
+      <!-- Farm Grid -->
+      <div class="card farm-card">
+        <h2 class="card-title">🗺️ Farm Board (5×5)</h2>
+        <div class="farm-legend">
+          <span class="legend-dot empty"></span>Empty
+          <span class="legend-dot planted"></span>Planted
+          <span class="legend-dot growing"></span>Growing
+          <span class="legend-dot mature"></span>Mature
+          <span class="legend-dot dead"></span>Dead
+          <span class="legend-dot locked"></span>Locked
+        </div>
+        <div class="farm-grid" id="farm-grid" role="grid" aria-label="Farm board"></div>
+      </div>
+
+    </section>
+
+    <!-- CENTER: Charts + Log -->
+    <section class="panel panel-center" aria-label="Analytics">
+
+      <!-- Wealth Chart -->
+      <div class="card chart-card">
+        <h2 class="card-title">📈 Terminal Wealth Over Time</h2>
+        <canvas id="wealth-chart" aria-label="Wealth chart"></canvas>
+      </div>
+
+      <!-- Warehouse -->
+      <div class="card warehouse-card">
+        <h2 class="card-title">🏠 Warehouse</h2>
+        <div class="warehouse-bar-wrap">
+          <div class="warehouse-bar-bg">
+            <div class="warehouse-bar" id="warehouse-bar" style="width:0%"></div>
+          </div>
+          <span id="warehouse-label" class="warehouse-label">0 / 100 units</span>
+        </div>
+        <div id="inventory-list" class="inventory-list"></div>
+      </div>
+
+      <!-- Action Log -->
+      <div class="card log-card">
+        <h2 class="card-title">📋 Action Log</h2>
+        <div id="action-log" class="action-log" role="log" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <!-- RIGHT: Crops + Animals + Metrics -->
+    <section class="panel panel-right" aria-label="Entities and Metrics">
+
+      <!-- Crops -->
+      <div class="card crops-card">
+        <h2 class="card-title">🌱 Active Crops</h2>
+        <div id="crops-list" class="entity-list"></div>
+      </div>
+
+      <!-- Animals -->
+      <div class="card animals-card">
+        <h2 class="card-title">🐄 Animals</h2>
+        <div id="animals-list" class="entity-list"></div>
+      </div>
+
+      <!-- Telemetry / Metrics -->
+      <div class="card metrics-card">
+        <h2 class="card-title">📊 Telemetry</h2>
+        <div id="metrics-grid" class="metrics-grid">
+          <div class="metric-item">
+            <span class="metric-label">Exceptions</span>
+            <span class="metric-value" id="m-exceptions">0</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Invalid Actions</span>
+            <span class="metric-value" id="m-invalid">0</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Crop Deaths</span>
+            <span class="metric-value warn" id="m-crop-deaths">0</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Animal Deaths</span>
+            <span class="metric-value warn" id="m-animal-deaths">0</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">WH Overflows</span>
+            <span class="metric-value warn" id="m-overflows">0</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Tasks Assigned</span>
+            <span class="metric-value good" id="m-tasks">0</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Terminal Result (shown at end) -->
+      <div class="card terminal-card" id="terminal-card" style="display:none">
+        <h2 class="card-title">🏆 Terminal Result</h2>
+        <div id="terminal-content" class="terminal-content"></div>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- Chart.js from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="/static/js/farm-grid.js"></script>
+  <script src="/static/js/charts.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
