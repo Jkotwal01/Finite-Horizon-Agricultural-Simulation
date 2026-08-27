@@ -54,9 +54,14 @@ class TaskScheduler:
         reserved_resources: dict[str, int] = {}
         worker_load: dict[int, list[str]] = {w["id"]: [] for w in workers}
 
+        # Build initial resource pool from task reservations
+        # (in a real system this would come from actual inventory;
+        #  here we treat each unique resource as having 1 unit available)
+        resource_pool: dict[str, int] = {}
+
         for task in sorted_tasks:
             # Check resource conflicts (BR-003)
-            if self._resource_conflict(task, reserved_resources):
+            if self._resource_conflict(task, resource_pool):
                 unassigned_tasks.append(task)
                 continue
 
@@ -75,11 +80,14 @@ class TaskScheduler:
             assigned_tasks.append(task)
             worker_load[best_worker["id"]].append(task.task_id)
 
-            # Reserve resources
+            # Reserve resources — deplete the pool so next task sees 0 left
             for resource, units in task.resource_reservation.items():
                 reserved_resources[resource] = (
                     reserved_resources.get(resource, 0) + units
                 )
+                # Deplete from pool (pool starts empty; treated as 1-unit-per-resource)
+                pool_left = resource_pool.get(resource, 1) - units
+                resource_pool[resource] = max(0, pool_left)
 
         return Assignments(
             assignments=assigned_tasks,
@@ -90,14 +98,17 @@ class TaskScheduler:
     # ── private helpers ───────────────────────────────────────────────────────
 
     def _resource_conflict(
-        self, task: Task, reserved: dict[str, int]
+        self, task: Task, pool: dict[str, int]
     ) -> bool:
-        """Returns True if any resource needed by this task is already reserved."""
-        for resource, units in task.resource_reservation.items():
-            if reserved.get(resource, 0) + units > reserved.get(resource + "_total", units + 1):
-                # Simplified check: if resource already reserved by anyone, skip
-                if resource in reserved:
-                    return True
+        """
+        Returns True if any resource needed by this task cannot be satisfied
+        from the remaining pool.
+        Pool starts with 1 unit per resource key; depleted as tasks are assigned.
+        """
+        for resource, units_needed in task.resource_reservation.items():
+            available = pool.get(resource, 1)  # default: 1 unit available
+            if available < units_needed:
+                return True
         return False
 
     def _find_best_worker(

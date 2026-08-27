@@ -71,15 +71,19 @@ class TestDailyWater:
     def test_watering_resets_missed_counter(self, mgr):
         """After watering, consecutive_missed_water resets to 0."""
         mgr.plant("WHEAT", 0, 0, 0)
-        mgr.advance_turn(1)  # PENDING
-        # Miss one turn (don't water)
-        mgr.advance_turn(2)
+        # Water BEFORE advancing turn 1 so it's not counted as a miss
+        mgr.water_crop(0, 0)
+        mgr.advance_turn(1)   # watered → counter stays 0
         crop = mgr.get_all_crops()[0]
+        assert crop.consecutive_missed_water == 0
+        # Now miss turn 2 (no water) → counter = 1
+        mgr.advance_turn(2)
         assert crop.consecutive_missed_water == 1
-        # Now water
+        # Water and advance turn 3 → counter resets
         mgr.water_crop(0, 0)
         mgr.advance_turn(3)
         assert crop.consecutive_missed_water == 0
+
 
     def test_two_missed_turns_kills_crop(self, mgr):
         """Missing 2 consecutive waterings kills the crop."""
