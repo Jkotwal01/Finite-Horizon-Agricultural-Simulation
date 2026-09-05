@@ -8,6 +8,8 @@ Rules enforced:
 - BR-006: Capacity emergency overrides price optimisation.
 - PRICE_FLOOR: No product sells below $1.
 - MAX_ORDERS: Max 10 sell orders per turn.
+- FR-014: Town/shop demand events fire on configured days,
+  consuming market inventory and resetting price decay.
 """
 from __future__ import annotations
 import sys, os
@@ -47,6 +49,10 @@ class MarketEngine:
     def __init__(self) -> None:
         self._sold_this_turn: dict[str, int] = {}
         self._order_count: int = 0
+        # Accumulated cumulative units sold per product across all turns.
+        # Town/shop demand events consume from this pool, resetting decay.
+        self._market_inventory: dict[str, int] = {}
+        self._fired_demand_days: set[int] = set()  # prevent double-firing
 
     def reset_turn(self) -> None:
         """Must be called at the start of each turn."""
@@ -68,11 +74,19 @@ class MarketEngine:
                            base_price: float) -> float:
         """
         Total proceeds for selling `units` of a product with marginal pricing.
+        Uses cumulative market_inventory so decay persists across turns,
+        but demand events reset it for a burst of profitable sales.
         """
-        already_sold = self._sold_this_turn.get(product, 0)
+        already_sold = self._market_inventory.get(product, 0)
         total = 0.0
         for i in range(units):
             total += self.marginal_price(product, already_sold + i, base_price)
+        # Update market inventory for cross-turn decay tracking
+        self._market_inventory[product] = already_sold + units
+        # Also track within-turn for this call
+        self._sold_this_turn[product] = (
+            self._sold_this_turn.get(product, 0) + units
+        )
         return round(total, 2)
 
     # ── sell planning ─────────────────────────────────────────────────────────
@@ -133,6 +147,42 @@ class MarketEngine:
         """Record a completed sale for this turn's tracking."""
         self._sold_this_turn[product] = self._sold_this_turn.get(product, 0) + units
         self._order_count += 1
+
+    # ── demand event processing ───────────────────────────────────────────────
+
+    def process_demand_events(self, current_day: int) -> list[dict]:
+        """
+        FR-014: Fire all demand events matching the current day.
+
+        When a town or shop demand event fires, it "consumes" units from the
+        market inventory pool. This resets the effective accumulated inventory
+        for that product, so the next seller benefits from full (or boosted)
+        base prices — simulating a real market surge.
+
+        Returns a list of fired event dicts for telemetry/logging.
+        """
+        if current_day in self._fired_demand_days:
+            return []  # already processed this day
+
+        fired = []
+        for event in cfg.DEMAND_EVENTS:
+            if event["day"] == current_day:
+                product = event["product"]
+                consumed = event["units"]
+                # Reduce accumulated market inventory by the consumed units.
+                # If more is consumed than accumulated, floor at 0 (net positive demand).
+                current_inv = self._market_inventory.get(product, 0)
+                self._market_inventory[product] = max(0, current_inv - consumed)
+                fired.append({
+                    "day": current_day,
+                    "product": product,
+                    "units_consumed": consumed,
+                    "source": event["source"],
+                    "market_inventory_after": self._market_inventory[product],
+                })
+        if fired:
+            self._fired_demand_days.add(current_day)
+        return fired
 
     # ── demand forecast ───────────────────────────────────────────────────────
 

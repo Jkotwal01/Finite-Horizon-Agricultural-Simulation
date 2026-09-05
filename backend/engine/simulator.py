@@ -129,6 +129,17 @@ class Simulator:
         # Reset market order counter for this turn
         self.market.reset_turn()
 
+        # 1a. Fire demand events for today (FR-014)
+        demand_events_fired = self.market.process_demand_events(time_state.day)
+        for de in demand_events_fired:
+            self.telemetry.record_accepted_action(turn, {
+                "kind": "DEMAND_EVENT",
+                "day": de["day"],
+                "product": de["product"],
+                "units_consumed": de["units_consumed"],
+                "source": de["source"],
+            })
+
         # 1. Generate mandatory survival tasks
         tasks = []
         water_tasks = self.crop_mgr.generate_water_tasks(turn)
