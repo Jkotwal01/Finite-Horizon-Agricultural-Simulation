@@ -1,8 +1,14 @@
 # 🌾 AgriSim — Finite-Horizon Agricultural Simulation
 
-An AI-driven farm management simulation built as an internship project.
-The AI "brain" autonomously manages crops, animals, warehouse, and market to
-**maximize Terminal Wealth** at the end of **720 turns** (30 days × 24 turns/day).
+This project is a **Full-Stack Autonomous AI Simulation Platform** built to solve a complex economic optimization problem disguised as a farming game.
+
+### The Problem Statement
+The challenge was to build a highly optimized, deterministic software engine that simulates an agricultural economy for exactly 720 turns. The engine enforces strict constraints (warehouse capacity limits, worker task limits) and models a dynamic economy where prices drop if you sell too much, but spike during "Town Demand Events". The goal was to build an automated "Strategy" that attempts to maximize total cash and assets (Terminal Wealth) before time runs out, without any human intervention.
+
+### The Solution
+We built a fully functional backend engine and a web dashboard:
+1. **The Backend Engine (Python)**: A robust rules engine that manages state, enforces legal actions, and schedules survival tasks. It includes a "Brain" (Counterfactual Replanning) that uses advanced search algorithms to simulate the future before making major economic decisions (like buying land).
+2. **The Frontend Dashboard (HTML/JS)**: A visual dashboard to prove the backend works by rendering the dynamic grid, animals, market events, and real-time telemetry.
 
 ---
 
