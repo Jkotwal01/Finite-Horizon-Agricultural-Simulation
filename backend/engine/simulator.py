@@ -212,6 +212,49 @@ class Simulator:
             for sell_a in market_plan.sell_actions:
                 tasks.append(self._sell_dict_to_task(sell_a, turn))
 
+        # 7.5 Strategic Tasks (Land & Labor)
+        if not time_state.is_endgame:
+            cash = self.current_state.cash if self.current_state else 0.0
+            empty_tiles = sum(1 for tile in (self.current_state.farms if self.current_state else []) if tile.get("status") == "EMPTY" and not tile.get("locked"))
+            workers_count = len(self._get_workers())
+            
+            # Evaluate land
+            land_plan = self.strategy.evaluate_land(
+                cash=cash,
+                remaining_turns=time_state.remaining_turns,
+                empty_tiles=empty_tiles,
+            )
+            if land_plan.action == "BUY":
+                from models.task import Task
+                tasks.append(Task(
+                    task_id=f"buy_land_{turn}",
+                    kind="BUY_LAND",
+                    priority=cfg.PRIORITY_ECONOMIC,
+                    value=land_plan.incremental_value,
+                    target=None,
+                    metadata={"cost": land_plan.cost}
+                ))
+            
+            # Evaluate labor
+            pending_tasks = len(tasks)
+            labor_plan = self.strategy.evaluate_labor(
+                cash=cash,
+                remaining_turns=time_state.remaining_turns,
+                current_hire_index=self.hire_index,
+                pending_tasks=pending_tasks,
+                workers=workers_count,
+            )
+            if labor_plan.action == "HIRE":
+                from models.task import Task
+                tasks.append(Task(
+                    task_id=f"hire_worker_{turn}",
+                    kind="HIRE",
+                    priority=cfg.PRIORITY_ECONOMIC,
+                    value=labor_plan.marginal_contribution,
+                    target=None,
+                    metadata={"cost": labor_plan.cost, "hire_index": self.hire_index}
+                ))
+
         # 8. Schedule tasks to workers
         workers = self._get_workers()
         assignments = self.scheduler.schedule(tasks, workers)
@@ -370,6 +413,28 @@ class Simulator:
             self.warehouse.remove_from_shed(product, units)
             if self.current_state:
                 self.current_state.cash += proceeds
+
+        elif kind == "BUY_LAND":
+            if self.current_state:
+                self.current_state.cash -= cfg.LAND_COST
+                # Expand grid by 1 tile
+                n_tiles = len(self.current_state.farms)
+                row = n_tiles // cfg.BOARD_COLS
+                col = n_tiles % cfg.BOARD_COLS
+                self.current_state.farms.append({
+                    "row": row, "col": col, "status": "EMPTY", "locked": False
+                })
+
+        elif kind == "HIRE":
+            if self.current_state:
+                hire_idx = int(action.get("hire_index", 0))
+                cost = cfg.HIRE_COSTS[min(hire_idx, len(cfg.HIRE_COSTS) - 1)]
+                self.current_state.cash -= cost
+                new_id = len(self.current_state.workers)
+                self.current_state.workers.append({
+                    "id": new_id, "row": 0, "col": 0, "carrying": {}
+                })
+                self.hire_index += 1
 
     def _auto_plant(self, turn: int, remaining_turns: int) -> None:
         """Automatically plant seeds on empty tiles if viable."""
