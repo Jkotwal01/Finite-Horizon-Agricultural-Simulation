@@ -98,16 +98,18 @@ class ActionValidator:
         kind = action.get("kind", "")
 
         validators = {
-            "SELL":      self._validate_sell,
-            "WATER":     self._validate_water,
-            "HARVEST":   self._validate_harvest,
-            "PLANT":     self._validate_plant,
-            "FERTILIZE": self._validate_fertilize,
-            "FEED":      self._validate_feed,
-            "BUY_ANIMAL": self._validate_buy_animal,
-            "COLLECT":   self._validate_collect,
-            "BUY_LAND":  self._validate_buy_land,
-            "HIRE":      self._validate_hire,
+            "SELL":             self._validate_sell,
+            "WATER":            self._validate_water,
+            "HARVEST":          self._validate_harvest,
+            "PLANT":            self._validate_plant,
+            "FERTILIZE":        self._validate_fertilize,
+            "FEED":             self._validate_feed,
+            "BUY_ANIMAL":       self._validate_buy_animal,
+            "COLLECT":          self._validate_collect,
+            "BUY_LAND":         self._validate_buy_land,
+            "HIRE":             self._validate_hire,
+            "BUILD_STRUCTURE":  self._validate_build_structure,
+            "PLACE_ANIMAL":     self._validate_place_animal,
         }
 
         validator = validators.get(kind)
@@ -202,6 +204,31 @@ class ActionValidator:
             return False, f"Insufficient cash to hire (need ${cost}, have ${sim['cash']})."
         return True, ""
 
+    def _validate_build_structure(self, a: dict, sim: dict) -> tuple[bool, str]:
+        structure_type = a.get("structure_type", "")
+        if not structure_type:
+            return False, "BUILD_STRUCTURE missing structure_type."
+        # Find cost from config
+        cost = 0.0
+        for rules in cfg.ANIMAL_RULES.values():
+            if rules.get("structure") == structure_type:
+                cost = rules.get("structure_cost", 0.0)
+                break
+        if sim["cash"] < cost:
+            return False, f"Insufficient cash to build {structure_type} (need ${cost}, have ${sim['cash']:.2f})."
+        if structure_type in sim["structures"]:
+            return False, f"{structure_type} already built."
+        return True, ""
+
+    def _validate_place_animal(self, a: dict, sim: dict) -> tuple[bool, str]:
+        # Basic check — full animal carry state lives in AnimalManager
+        if not a.get("animal_id"):
+            return False, "PLACE_ANIMAL missing animal_id."
+        target = a.get("target")
+        if not target or len(target) < 2:
+            return False, "PLACE_ANIMAL missing target coordinates."
+        return True, ""
+
     # ── state mutation after acceptance ──────────────────────────────────────
 
     def _apply(self, action: dict, sim: dict) -> None:
@@ -241,3 +268,12 @@ class ActionValidator:
             hire_index = int(action.get("hire_index", 0))
             cost = cfg.HIRE_COSTS[min(hire_index, len(cfg.HIRE_COSTS) - 1)]
             sim["cash"] -= cost
+
+        elif kind == "BUILD_STRUCTURE":
+            structure_type = action.get("structure_type", "")
+            for rules in cfg.ANIMAL_RULES.values():
+                if rules.get("structure") == structure_type:
+                    sim["cash"] -= rules.get("structure_cost", 0.0)
+                    break
+            if structure_type and structure_type not in sim["structures"]:
+                sim["structures"].append(structure_type)

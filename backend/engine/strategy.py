@@ -1,7 +1,7 @@
 """
-engine/strategy.py — StrategyEngine (FR-010, FR-011, FR-019 stub).
+engine/strategy.py — StrategyEngine (FR-010, FR-011, FR-016, FR-019 stub).
 
-Land economics, labor economics, and bounded counterfactual replanning.
+Land economics, labor economics, animal economics, and bounded counterfactual replanning.
 
 Rules:
 - BR-007: Actions evaluated against remaining usable turns.
@@ -34,6 +34,20 @@ class LaborPlan:
     action: str = "WAIT"         # "HIRE" | "WAIT"
     cost: float = 0.0
     marginal_contribution: float = 0.0
+    net_benefit: float = 0.0
+    reason: str = ""
+
+    def to_dict(self) -> dict:
+        return self.__dict__
+
+
+@dataclass
+class AnimalPlan:
+    action: str = "WAIT"          # "BUILD" | "BUY" | "WAIT"
+    kind: str = ""
+    structure: str = ""
+    cost: float = 0.0
+    expected_revenue: float = 0.0
     net_benefit: float = 0.0
     reason: str = ""
 
@@ -130,6 +144,78 @@ class StrategyEngine:
             action="WAIT", cost=hire_cost,
             marginal_contribution=marginal, net_benefit=net,
             reason="Hiring not justified by current task load.",
+        )
+
+    def evaluate_animals(
+        self,
+        kind: str,
+        cash: float,
+        remaining_turns: int,
+        has_structure: bool,
+        current_animal_count: int,
+    ) -> AnimalPlan:
+        """
+        FR-016: Compare acquiring an animal against waiting.
+
+        Calculates:
+        - Acquisition cost (structure if needed + animal cost)
+        - Cumulative feed cost over remaining turns
+        - Expected production revenue (discounted for late-horizon turns)
+        """
+        rules = cfg.ANIMAL_RULES.get(kind)
+        if rules is None:
+            return AnimalPlan(action="WAIT", reason=f"Unknown animal: {kind}.")
+
+        # Must have enough turns for at least one production cycle
+        if remaining_turns < rules["product_interval"] * 2:
+            return AnimalPlan(
+                action="WAIT", kind=kind,
+                reason=f"Too late to recover investment in {kind} ({remaining_turns} turns left).",
+            )
+
+        structure_cost = 0.0 if has_structure else rules["structure_cost"]
+        animal_cost = rules["cost"]
+        total_acquisition_cost = structure_cost + animal_cost
+
+        if cash < total_acquisition_cost:
+            return AnimalPlan(
+                action="WAIT", kind=kind, cost=total_acquisition_cost,
+                reason=f"Insufficient cash (need ${total_acquisition_cost:.2f}, have ${cash:.2f}).",
+            )
+
+        # Expected production: number of full product intervals within remaining turns
+        usable_turns = max(0, remaining_turns - rules["product_interval"])  # 1st interval = transit time
+        production_cycles = usable_turns // rules["product_interval"]
+        expected_revenue = production_cycles * rules["product_units"] * rules["sell_price"]
+
+        # Cumulative feed cost over all remaining turns
+        total_feed_cost = (remaining_turns / cfg.TURNS_PER_DAY) * rules["feed_cost_per_turn"]
+
+        net = expected_revenue - total_acquisition_cost - total_feed_cost
+
+        if net <= 0:
+            return AnimalPlan(
+                action="WAIT", kind=kind,
+                cost=total_acquisition_cost,
+                expected_revenue=expected_revenue,
+                net_benefit=net,
+                reason=f"Animal investment not profitable (net={net:.2f}).",
+            )
+
+        # Decide: need to build structure first, or can go straight to buy?
+        if not has_structure:
+            return AnimalPlan(
+                action="BUILD", kind=kind, structure=rules["structure"],
+                cost=structure_cost,
+                expected_revenue=expected_revenue, net_benefit=net,
+                reason=f"Must build {rules['structure']} before acquiring {kind}.",
+            )
+
+        return AnimalPlan(
+            action="BUY", kind=kind, structure=rules["structure"],
+            cost=animal_cost,
+            expected_revenue=expected_revenue, net_benefit=net,
+            reason=f"Profitable to acquire {kind} ({production_cycles} cycles, net=${net:.2f}).",
         )
 
     def bounded_replan(

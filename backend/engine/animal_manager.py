@@ -178,6 +178,65 @@ class AnimalManager:
             ))
         return tasks
 
+    def generate_build_structure_tasks(self, structure_type: str,
+                                       cost: float) -> list[Task]:
+        """FR-008: Generate a BUILD_STRUCTURE task if not already built."""
+        if self.has_structure(structure_type):
+            return []
+        self._task_counter += 1
+        return [Task(
+            task_id=f"build_{structure_type.lower()}_{self._task_counter}",
+            kind="BUILD_STRUCTURE",
+            priority=cfg.PRIORITY_ECONOMIC,
+            value=0.0,
+            target=None,
+            resource_reservation={},
+            preconditions={},
+            metadata={"structure_type": structure_type, "cost": cost},
+        )]
+
+    def generate_buy_animal_tasks(self, kind: str) -> list[Task]:
+        """FR-008: Generate a BUY_ANIMAL task when structure exists but animal not yet owned."""
+        rules = cfg.ANIMAL_RULES.get(kind)
+        if rules is None or not self.has_structure(rules["structure"]):
+            return []
+        self._task_counter += 1
+        return [Task(
+            task_id=f"buy_{kind.lower()}_{self._task_counter}",
+            kind="BUY_ANIMAL",
+            priority=cfg.PRIORITY_ECONOMIC,
+            value=rules["sell_price"] * rules["product_units"],
+            target=None,
+            resource_reservation={},
+            preconditions={"structure_exists": True},
+            metadata={"kind_animal": kind, "cost": rules["cost"]},
+        )]
+
+    def generate_place_animal_tasks(self,
+                                    empty_tiles: list[tuple[int, int]]) -> list[Task]:
+        """FR-008: Generate PLACE_ANIMAL tasks for any carried animals."""
+        tasks = []
+        tile_iter = iter(empty_tiles)
+        for aid, animal in self._animals.items():
+            if animal.location != "CARRIED":
+                continue
+            try:
+                row, col = next(tile_iter)
+            except StopIteration:
+                break
+            self._task_counter += 1
+            tasks.append(Task(
+                task_id=f"place_{aid}_{self._task_counter}",
+                kind="PLACE_ANIMAL",
+                priority=cfg.PRIORITY_ECONOMIC + 5,   # slightly above economic
+                value=0.0,
+                target=[row, col],
+                resource_reservation={},
+                preconditions={"animal_carried": True},
+                metadata={"animal_id": aid, "kind": animal.kind},
+            ))
+        return tasks
+
     # ── helpers ───────────────────────────────────────────────────────────────
 
     def count_all_animals(self, kind: str) -> int:

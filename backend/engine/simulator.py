@@ -266,6 +266,36 @@ class Simulator:
                     metadata={"cost": labor_plan.cost, "hire_index": self.hire_index}
                 ))
 
+            # Evaluate animal acquisition (FR-016) for each animal type
+            for kind in cfg.ANIMAL_RULES:
+                has_structure = self.animal_mgr.has_structure(
+                    cfg.ANIMAL_RULES[kind]["structure"]
+                )
+                current_count = self.animal_mgr.count_all_animals(kind)
+                # Only evaluate if we don't already own any of this kind
+                if current_count == 0:
+                    animal_plan = self.strategy.evaluate_animals(
+                        kind=kind,
+                        cash=cash,
+                        remaining_turns=time_state.remaining_turns,
+                        has_structure=has_structure,
+                        current_animal_count=current_count,
+                    )
+                    if animal_plan.action == "BUILD":
+                        tasks.extend(self.animal_mgr.generate_build_structure_tasks(
+                            animal_plan.structure, animal_plan.cost
+                        ))
+                    elif animal_plan.action == "BUY":
+                        tasks.extend(self.animal_mgr.generate_buy_animal_tasks(kind))
+
+            # Generate PLACE_ANIMAL tasks for any carried animals
+            empty_tiles = [
+                (t["row"], t["col"])
+                for t in (self.current_state.farms if self.current_state else [])
+                if t.get("status") == "EMPTY" and not t.get("locked")
+            ]
+            tasks.extend(self.animal_mgr.generate_place_animal_tasks(empty_tiles))
+
         # 8. Schedule tasks to workers
         workers = self._get_workers()
         assignments = self.scheduler.schedule(tasks, workers)
@@ -343,6 +373,8 @@ class Simulator:
     def _build_state_snapshot(self) -> dict:
         """Build snapshot dict for validator."""
         shed = self.warehouse.shed_snapshot()
+        # Expose built structures from animal manager to validator
+        built_structures = list(self.animal_mgr._structures)
         return {
             "cash": self.current_state.cash if self.current_state else 0,
             "shed_inventory": shed,
@@ -350,7 +382,7 @@ class Simulator:
             "fertilizer": self.warehouse.get_seeds("FERTILIZER"),
             "feed": self.warehouse.get_seeds("FEED"),
             "market_orders_used": 0,
-            "structures": [s["type"] for s in (self.current_state.structures if self.current_state else [])],
+            "structures": built_structures,
             "farms": self.current_state.farms if self.current_state else [],
         }
 
@@ -446,6 +478,51 @@ class Simulator:
                     "id": new_id, "row": 0, "col": 0, "carrying": {}
                 })
                 self.hire_index += 1
+
+        elif kind == "BUILD_STRUCTURE":
+            if self.current_state:
+                structure_type = action.get("structure_type", "")
+                rules = next(
+                    (r for r in cfg.ANIMAL_RULES.values()
+                     if r.get("structure") == structure_type), {}
+                )
+                cost = rules.get("structure_cost", 0.0)
+                self.current_state.cash -= cost
+                self.animal_mgr.build_structure(structure_type)
+                # Append structure to canonical state for frontend visibility
+                if not any(s.get("type") == structure_type
+                           for s in self.current_state.structures):
+                    self.current_state.structures.append({"type": structure_type})
+
+        elif kind == "BUY_ANIMAL":
+            if self.current_state:
+                kind_animal = action.get("kind_animal", "")
+                rules = cfg.ANIMAL_RULES.get(kind_animal, {})
+                cost = rules.get("cost", 0.0)
+                self.current_state.cash -= cost
+                # Pick first available worker as carrier
+                worker_id = (
+                    self.current_state.workers[0]["id"]
+                    if self.current_state.workers else 0
+                )
+                try:
+                    self.animal_mgr.buy_animal(kind_animal, worker_id)
+                except ValueError:
+                    pass  # structure missing — validator should have caught this
+
+        elif kind == "PLACE_ANIMAL":
+            animal_id = action.get("animal_id", "")
+            target = action.get("target", [])
+            if animal_id and target and len(target) >= 2:
+                placed = self.animal_mgr.place_animal(
+                    animal_id, target[0], target[1], self.current_turn
+                )
+                # Update farm tile status to show animal is here
+                if placed and self.current_state:
+                    for tile in self.current_state.farms:
+                        if tile["row"] == target[0] and tile["col"] == target[1]:
+                            tile["status"] = "ANIMAL"
+                            break
 
     def _auto_plant(self, turn: int, remaining_turns: int) -> None:
         """Automatically plant seeds on empty tiles if viable."""
