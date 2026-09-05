@@ -60,6 +60,11 @@ class TelemetryEngine:
     def record_warehouse_overflow(self, turn: int) -> None:
         self.report.warehouse_overflows += 1
         self.report.loss_events["warehouse_overflows"] = self.report.warehouse_overflows
+        self.report.record_action(turn, {}, "WAREHOUSE_OVERFLOW",
+                                  "Shed capacity exceeded. Production blocked.")
+
+    def record_replan(self) -> None:
+        self.report.replans += 1
 
     def record_forecast_error(self, domain: str, predicted: float,
                               actual: float) -> None:

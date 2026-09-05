@@ -29,6 +29,7 @@ class EvaluationReport:
     crop_deaths: int = 0
     animal_deaths: int = 0
     warehouse_overflows: int = 0
+    replans: int = 0
 
     def record_action(self, turn: int, action: dict, result: str,
                       error: str = "") -> None:

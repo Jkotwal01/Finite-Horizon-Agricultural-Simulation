@@ -18,12 +18,18 @@ const CROP_ICONS = {
   STRAWBERRY: "🍓",
 };
 
+const ANIMAL_ICONS = {
+  COW: "🐄",
+  CHICKEN: "🐔"
+};
+
 /**
- * Render the 5×5 farm grid.
- * @param {Array} farms  - array of tile objects from API
- * @param {Array} crops  - array of crop objects from API
+ * Render the dynamic farm grid.
+ * @param {Array} farms   - array of tile objects from API
+ * @param {Array} crops   - array of crop objects from API
+ * @param {Array} animals - array of animal objects from API
  */
-function renderFarmGrid(farms, crops) {
+function renderFarmGrid(farms, crops, animals) {
   const grid = document.getElementById("farm-grid");
   if (!grid) return;
 
@@ -35,6 +41,23 @@ function renderFarmGrid(farms, crops) {
     });
   }
 
+  // Build animal lookup by tile position (for PLACED animals)
+  const animalMap = {};
+  if (animals) {
+    animals.forEach(a => {
+      if (a.location === 'PLACED') {
+        animalMap[`${a.tile_row},${a.tile_col}`] = a;
+      }
+    });
+  }
+
+  // Calculate dynamic grid size (FR-010 board expansion)
+  let maxCol = 4; // minimum 5 columns (0 to 4)
+  if (farms && farms.length > 0) {
+    maxCol = Math.max(...farms.map(f => f.col));
+  }
+  grid.style.setProperty("--board-cols", maxCol + 1);
+
   grid.innerHTML = "";
 
   // Sort farms by row then col for consistent rendering
@@ -43,21 +66,26 @@ function renderFarmGrid(farms, crops) {
   sorted.forEach(tile => {
     const key = `${tile.row},${tile.col}`;
     const crop = cropMap[key];
+    const animal = animalMap[key];
 
     const div = document.createElement("div");
     div.className = `farm-tile status-${tile.status || "EMPTY"}`;
     div.setAttribute("role", "gridcell");
     div.setAttribute("aria-label", `Tile ${tile.row},${tile.col}: ${tile.status}`);
-    div.title = buildTileTooltip(tile, crop);
+    div.title = buildTileTooltip(tile, crop, animal);
 
     // Icon
     let icon = TILE_ICONS[tile.status] || "⬜";
     if (crop && !crop.is_dead) {
       icon = CROP_ICONS[crop.crop] || icon;
+    } else if (animal && tile.status === 'ANIMAL') {
+      icon = ANIMAL_ICONS[animal.kind] || "🐄";
     }
 
-    // Label (crop name or tile coords)
-    let label = crop ? `${crop.crop} A${crop.age}` : `${tile.row},${tile.col}`;
+    // Label (crop name, animal name, or tile coords)
+    let label = `${tile.row},${tile.col}`;
+    if (crop) label = `${crop.crop} A${crop.age}`;
+    if (animal) label = `${animal.kind}`;
     if (tile.locked) { icon = "🔒"; label = "LOCKED"; }
 
     div.innerHTML = `
@@ -69,14 +97,23 @@ function renderFarmGrid(farms, crops) {
   });
 }
 
-function buildTileTooltip(tile, crop) {
-  if (!crop) return `(${tile.row},${tile.col}) ${tile.status}`;
-  return (
-    `(${tile.row},${tile.col}) ${crop.crop}\n` +
+function buildTileTooltip(tile, crop, animal) {
+  let tooltip = `(${tile.row},${tile.col}) ${tile.status}`;
+  
+  if (crop) {
+    tooltip = `(${tile.row},${tile.col}) ${crop.crop}\n` +
     `Age: ${crop.age} turns\n` +
     `Water: ${crop.water_status}\n` +
     `Fertilized: ${crop.fertilized}\n` +
     `Yield: ${crop.yield_units} units\n` +
-    (crop.is_mature ? "✅ MATURE" : `Matures in ~${Math.max(0,48-crop.age)} turns`)
-  );
+    (crop.is_mature ? "✅ MATURE" : `Matures in ~${Math.max(0,48-crop.age)} turns`);
+  } else if (animal) {
+    tooltip = `(${tile.row},${tile.col}) ${animal.kind}\n` +
+    `ID: ${animal.animal_id}\n` +
+    `Alive: ${animal.is_alive ? 'Yes' : 'No'}\n` +
+    `Fed: ${animal.fed ? 'Yes ✅' : 'No ❌'}\n` +
+    `Missed Feeds: ${animal.consecutive_missed_feed}\n` +
+    `Product Ready: ${animal.product_ready}`;
+  }
+  return tooltip;
 }

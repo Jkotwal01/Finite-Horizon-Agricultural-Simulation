@@ -581,6 +581,9 @@ class Simulator:
                 current_plan = cand_plan
                 best_tasks = candidate_tasks
 
+        if candidates and not self.is_clone:
+            self.telemetry.record_replan()
+            
         return best_tasks
 
     def _auto_plant(self, turn: int, remaining_turns: int) -> None:
@@ -658,6 +661,7 @@ class Simulator:
             "seeds": dict(self.warehouse._seeds),
             "crops": [c.to_dict() for c in self.crop_mgr.get_all_crops()],
             "animals": [a.to_dict() for a in self.animal_mgr.get_all_animals()],
+            "structures": list(self.animal_mgr._structures),
             "warehouse_total": self.warehouse.total_non_seed_units(),
             "warehouse_capacity": cfg.SHED_CAPACITY,
         }

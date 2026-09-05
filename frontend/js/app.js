@@ -135,7 +135,7 @@ function updateAll(state, result, turn) {
   updateWealthChart(turn, state.cash || 0, wealth);
 
   // Farm grid
-  renderFarmGrid(state.farms || [], state.crops || []);
+  renderFarmGrid(state.farms || [], state.crops || [], state.animals || []);
 
   // Warehouse
   updateWarehouse(state.warehouse_total || 0, state.warehouse_capacity || 100, state.shed_inventory || {}, state.seeds || {});
@@ -144,7 +144,7 @@ function updateAll(state, result, turn) {
   renderCrops(state.crops || []);
 
   // Animals list
-  renderAnimals(state.animals || []);
+  renderAnimals(state.animals || [], state.structures || []);
 
   // Telemetry
   if (result) {
@@ -255,6 +255,7 @@ async function fetchReport() {
     setText("m-crop-deaths", r.crop_deaths || 0);
     setText("m-animal-deaths", r.animal_deaths || 0);
     setText("m-overflows", r.warehouse_overflows || 0);
+    setText("m-replans", r.replans || 0);
 
     // Log last few actions
     const logEl = document.getElementById("action-log");
@@ -299,10 +300,20 @@ function setStatus(msg) {
 function log(msg, type = "ok", turn = "—") {
   const container = document.getElementById("action-log");
   if (!container) return;
-  const entry = document.createElement("div");
-  entry.className = `log-entry ${type}`;
-  entry.innerHTML = `<span class="log-turn">T${turn}</span><span class="log-text">${msg}</span>`;
-  container.appendChild(entry);
+
+  const el = document.createElement("div");
+  
+  // Highlight demand events (FR-014)
+  if (msg.includes("DEMAND_EVENT")) {
+    type = "demand"; // We will add CSS for this below if needed, or inline it
+    el.style.backgroundColor = "rgba(234, 179, 8, 0.2)";
+    el.style.borderLeftColor = "#eab308";
+    el.style.color = "#fef08a";
+  }
+  
+  el.className = `log-entry ${type}`;
+  el.innerHTML = `<span class="log-turn">[T${turn}]</span> <span class="log-msg">${msg}</span>`;
+  container.appendChild(el);
   // Keep last 100 entries
   while (container.children.length > 100) container.removeChild(container.firstChild);
   container.scrollTop = container.scrollHeight;
