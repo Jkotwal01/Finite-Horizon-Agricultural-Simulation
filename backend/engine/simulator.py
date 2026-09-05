@@ -53,6 +53,9 @@ class Simulator:
         self.hire_index: int = 0   # reset daily
         self._last_day: int = -1
 
+        self.is_clone: bool = False
+        self.forced_strategic_tasks: list = []
+
     # ── simulation control ────────────────────────────────────────────────────
 
     def start(self, initial_cash: float = cfg.INITIAL_CASH) -> dict:
@@ -79,18 +82,25 @@ class Simulator:
         if self.current_turn >= cfg.TOTAL_TURNS:
             return {"status": "finished", "terminal": self._compute_terminal().to_dict()}
 
-        self.telemetry.start_turn(self.current_turn)
+        if not self.is_clone:
+            self.telemetry.start_turn(self.current_turn)
 
         try:
             result = self._run_turn()
         except Exception as e:
-            self.telemetry.record_exception(self.current_turn, str(e))
+            if not self.is_clone:
+                self.telemetry.record_exception(self.current_turn, str(e))
             result = {"error": str(e), "turn": self.current_turn}
 
         self.current_turn += 1
         wealth = self.current_state.cash if self.current_state else 0.0
-        elapsed = self.telemetry.end_turn(self.current_turn, wealth)
-        result["elapsed_ms"] = round(elapsed, 2)
+        
+        if not self.is_clone:
+            elapsed = self.telemetry.end_turn(self.current_turn, wealth)
+            result["elapsed_ms"] = round(elapsed, 2)
+        else:
+            result["elapsed_ms"] = 0.0
+            
         result["turn"] = self.current_turn
 
         if self.current_turn >= cfg.TOTAL_TURNS:
@@ -131,14 +141,15 @@ class Simulator:
 
         # 1a. Fire demand events for today (FR-014)
         demand_events_fired = self.market.process_demand_events(time_state.day)
-        for de in demand_events_fired:
-            self.telemetry.record_accepted_action(turn, {
-                "kind": "DEMAND_EVENT",
-                "day": de["day"],
-                "product": de["product"],
-                "units_consumed": de["units_consumed"],
-                "source": de["source"],
-            })
+        if not self.is_clone:
+            for de in demand_events_fired:
+                self.telemetry.record_accepted_action(turn, {
+                    "kind": "DEMAND_EVENT",
+                    "day": de["day"],
+                    "product": de["product"],
+                    "units_consumed": de["units_consumed"],
+                    "source": de["source"],
+                })
 
         # 1. Generate mandatory survival tasks
         tasks = []
@@ -151,19 +162,20 @@ class Simulator:
         crop_events = self.crop_mgr.advance_turn(turn)
         animal_events = self.animal_mgr.advance_turn(turn)
 
-        for evt in crop_events:
-            if evt["type"] == "DEAD":
-                self.telemetry.record_crop_death(turn, evt["crop"])
-        for evt in animal_events:
-            if evt["type"] == "ANIMAL_DEAD":
-                self.telemetry.record_animal_death(turn, evt["animal"])
+        if not self.is_clone:
+            for evt in crop_events:
+                if evt["type"] == "DEAD":
+                    self.telemetry.record_crop_death(turn, evt["crop"])
+            for evt in animal_events:
+                if evt["type"] == "ANIMAL_DEAD":
+                    self.telemetry.record_animal_death(turn, evt["animal"])
 
         # 3. Warehouse forecast
         wh_forecast = self.warehouse.forecast(
             projected_inflow=len(self.crop_mgr.generate_harvest_tasks()),
             projected_outflow=0,
         )
-        if wh_forecast.overflow_risk:
+        if wh_forecast.overflow_risk and not self.is_clone:
             self.telemetry.record_warehouse_overflow(turn)
 
         # 4. Production forecast
@@ -223,72 +235,72 @@ class Simulator:
             for sell_a in market_plan.sell_actions:
                 tasks.append(self._sell_dict_to_task(sell_a, turn))
 
-        # 7.5 Strategic Tasks (Land & Labor)
-        if not time_state.is_endgame:
+        # 7.5 Strategic Tasks (Land & Labor & Animals)
+        # Instead of directly appending, we collect heuristic candidates and use Counterfactual Replanning (FR-019)
+        if self.is_clone and self.forced_strategic_tasks:
+            # We are a clone executing a specific forced branch this turn
+            tasks.extend(self.forced_strategic_tasks)
+            self.forced_strategic_tasks = []  # clear after forcing once
+            
+        elif not self.is_clone and not time_state.is_endgame:
             cash = self.current_state.cash if self.current_state else 0.0
             empty_tiles = sum(1 for tile in (self.current_state.farms if self.current_state else []) if tile.get("status") == "EMPTY" and not tile.get("locked"))
             workers_count = len(self._get_workers())
             
+            candidates = []
+            
             # Evaluate land
             land_plan = self.strategy.evaluate_land(
-                cash=cash,
-                remaining_turns=time_state.remaining_turns,
-                empty_tiles=empty_tiles,
+                cash=cash, remaining_turns=time_state.remaining_turns, empty_tiles=empty_tiles,
             )
             if land_plan.action == "BUY":
                 from models.task import Task
-                tasks.append(Task(
-                    task_id=f"buy_land_{turn}",
-                    kind="BUY_LAND",
-                    priority=cfg.PRIORITY_ECONOMIC,
-                    value=land_plan.incremental_value,
-                    target=None,
-                    metadata={"cost": land_plan.cost}
-                ))
+                t = Task(
+                    task_id=f"buy_land_{turn}", kind="BUY_LAND",
+                    priority=cfg.PRIORITY_ECONOMIC, value=land_plan.incremental_value,
+                    target=None, metadata={"cost": land_plan.cost}
+                )
+                candidates.append([t])
             
             # Evaluate labor
             pending_tasks = len(tasks)
             labor_plan = self.strategy.evaluate_labor(
-                cash=cash,
-                remaining_turns=time_state.remaining_turns,
-                current_hire_index=self.hire_index,
-                pending_tasks=pending_tasks,
-                workers=workers_count,
+                cash=cash, remaining_turns=time_state.remaining_turns,
+                current_hire_index=self.hire_index, pending_tasks=pending_tasks, workers=workers_count,
             )
             if labor_plan.action == "HIRE":
                 from models.task import Task
-                tasks.append(Task(
-                    task_id=f"hire_worker_{turn}",
-                    kind="HIRE",
-                    priority=cfg.PRIORITY_ECONOMIC,
-                    value=labor_plan.marginal_contribution,
-                    target=None,
-                    metadata={"cost": labor_plan.cost, "hire_index": self.hire_index}
-                ))
-
-            # Evaluate animal acquisition (FR-016) for each animal type
-            for kind in cfg.ANIMAL_RULES:
-                has_structure = self.animal_mgr.has_structure(
-                    cfg.ANIMAL_RULES[kind]["structure"]
+                t = Task(
+                    task_id=f"hire_worker_{turn}", kind="HIRE",
+                    priority=cfg.PRIORITY_ECONOMIC, value=labor_plan.marginal_contribution,
+                    target=None, metadata={"cost": labor_plan.cost, "hire_index": self.hire_index}
                 )
+                candidates.append([t])
+
+            # Evaluate animal acquisition
+            for kind in cfg.ANIMAL_RULES:
+                has_structure = self.animal_mgr.has_structure(cfg.ANIMAL_RULES[kind]["structure"])
                 current_count = self.animal_mgr.count_all_animals(kind)
-                # Only evaluate if we don't already own any of this kind
                 if current_count == 0:
                     animal_plan = self.strategy.evaluate_animals(
-                        kind=kind,
-                        cash=cash,
-                        remaining_turns=time_state.remaining_turns,
-                        has_structure=has_structure,
-                        current_animal_count=current_count,
+                        kind=kind, cash=cash, remaining_turns=time_state.remaining_turns,
+                        has_structure=has_structure, current_animal_count=current_count,
                     )
                     if animal_plan.action == "BUILD":
-                        tasks.extend(self.animal_mgr.generate_build_structure_tasks(
+                        candidates.append(self.animal_mgr.generate_build_structure_tasks(
                             animal_plan.structure, animal_plan.cost
                         ))
                     elif animal_plan.action == "BUY":
-                        tasks.extend(self.animal_mgr.generate_buy_animal_tasks(kind))
+                        candidates.append(self.animal_mgr.generate_buy_animal_tasks(kind))
 
-            # Generate PLACE_ANIMAL tasks for any carried animals
+            # Counterfactual Replanning (FR-019)
+            if candidates:
+                best_tasks = self._run_counterfactuals(candidates, time_state.remaining_turns)
+                if best_tasks:
+                    tasks.extend(best_tasks)
+
+        # Generate PLACE_ANIMAL tasks for any carried animals (these are mandatory if carried, not strategic)
+        if not time_state.is_endgame:
             empty_tiles = [
                 (t["row"], t["col"])
                 for t in (self.current_state.farms if self.current_state else [])
@@ -306,12 +318,16 @@ class Simulator:
         validated = self.validator.validate_all(proposed_actions, state_snapshot)
 
         # 10. Log accepted / rejected
-        for a in validated.accepted:
-            self.telemetry.record_accepted_action(turn, a)
-            self._apply_action(a)
-        for r in validated.rejected:
-            self.telemetry.record_invalid_action(turn, r["action"] if isinstance(r, dict) else r,
-                                                  r.get("error", "") if isinstance(r, dict) else "")
+        if not self.is_clone:
+            for a in validated.accepted:
+                self.telemetry.record_accepted_action(turn, a)
+                self._apply_action(a)
+            for r in validated.rejected:
+                self.telemetry.record_invalid_action(turn, r["action"] if isinstance(r, dict) else r,
+                                                      r.get("error", "") if isinstance(r, dict) else "")
+        else:
+            for a in validated.accepted:
+                self._apply_action(a)
 
         # 11. Auto-plant if there are empty tiles and we're not in endgame
         if not time_state.is_endgame:
@@ -523,6 +539,49 @@ class Simulator:
                         if tile["row"] == target[0] and tile["col"] == target[1]:
                             tile["status"] = "ANIMAL"
                             break
+
+    def _run_counterfactuals(self, candidates: list[list], remaining_turns: int) -> list:
+        """
+        Evaluate candidates by simulating to the end of the game (FR-019).
+        Returns the list of tasks for the best candidate.
+        """
+        import copy
+        from models.plan import Plan
+
+        # 1. Evaluate baseline (no strategic tasks)
+        baseline_sim = copy.deepcopy(self)
+        baseline_sim.is_clone = True
+        baseline_sim.forced_strategic_tasks = []
+        res = baseline_sim.run_n_turns(remaining_turns)
+        baseline_wealth = res.get("terminal", {}).get("terminal_wealth", 0.0)
+
+        current_plan = Plan(
+            baseline_terminal_value=baseline_wealth,
+            expected_terminal_value=baseline_wealth
+        )
+        best_tasks = []
+
+        # 2. Evaluate each candidate
+        for candidate_tasks in candidates:
+            cand_sim = copy.deepcopy(self)
+            cand_sim.is_clone = True
+            cand_sim.forced_strategic_tasks = candidate_tasks
+            res = cand_sim.run_n_turns(remaining_turns)
+            cand_wealth = res.get("terminal", {}).get("terminal_wealth", 0.0)
+
+            cand_plan = Plan(
+                actions=[self._task_to_action(t) for t in candidate_tasks],
+                baseline_terminal_value=baseline_wealth,
+                expected_terminal_value=cand_wealth,
+                improvement=cand_wealth - baseline_wealth,
+            )
+
+            result_plan = self.strategy.bounded_replan(current_plan, cand_plan)
+            if result_plan is cand_plan:
+                current_plan = cand_plan
+                best_tasks = candidate_tasks
+
+        return best_tasks
 
     def _auto_plant(self, turn: int, remaining_turns: int) -> None:
         """Automatically plant seeds on empty tiles if viable."""
